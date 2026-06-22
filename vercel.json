@@ -8,6 +8,10 @@
     {
       "source": "/tracks/:path*",
       "destination": "/api/proxy"
+    },
+    {
+      "source": "/vendor/:path*",
+      "destination": "/api/proxy"
     }
   ]
 }

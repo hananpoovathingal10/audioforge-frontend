@@ -4,8 +4,11 @@ const http = require('http');
 module.exports = (req, res) => {
   const backendUrl = process.env.api_key || 'https://audioforge-backend.onrender.com';
   
+  // Get the original URI requested by the user from Vercel's headers
+  const originalUri = req.headers['x-forwarded-uri'] || req.url;
+  
   // Parse target URL
-  const targetUrl = new URL(req.url, backendUrl);
+  const targetUrl = new URL(originalUri, backendUrl);
   
   // Clone and override request headers
   const headers = { ...req.headers };

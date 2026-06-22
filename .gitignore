@@ -1,0 +1,5 @@
+# Frontend .gitignore
+# No node_modules here — this is pure HTML/CSS/JS
+.DS_Store
+Thumbs.db
+*.swp

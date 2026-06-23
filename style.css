@@ -67,34 +67,38 @@ html, body {
   position: fixed; inset: 0;
   width: 100%; height: 100%; z-index: 0;
   pointer-events: none;
+  will-change: transform;
 }
 #bg-frost {
   position: fixed; inset: 0; z-index: 1;
   background: rgba(7, 5, 18, 0.82);
-  backdrop-filter: blur(2px);
+  /* removed backdrop-filter: blur — causes full-screen repaint every frame */
   pointer-events: none;
 }
 
 /* ── Custom Cursor ──────────────────────────────────── */
 #cursor-dot {
   position: fixed; z-index: 9999; pointer-events: none;
-  width: 5px; height: 5px; border-radius: 50%; background: #fff;
-  transform: translate(-50%, -50%);
-  transition: width .15s ease, height .15s ease;
-  mix-blend-mode: difference;
+  width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,0.9);
+  /* use transform3d — GPU-composited, no layout reflow */
+  transform: translate3d(-50%, -50%, 0);
+  top: 0; left: 0;
+  will-change: transform;
+  transition: width .12s ease, height .12s ease, background .12s ease;
 }
 #cursor-ring {
   position: fixed; z-index: 9998; pointer-events: none;
   width: 28px; height: 28px; border-radius: 50%;
-  border: 1px solid rgba(255,255,255,.25);
-  transform: translate(-50%, -50%);
-  transition: transform .2s cubic-bezier(.25,1,.5,1),
-              width .22s cubic-bezier(.25,1,.5,1),
-              height .22s cubic-bezier(.25,1,.5,1),
-              border-color .2s ease;
+  border: 1px solid rgba(255,255,255,.22);
+  top: 0; left: 0;
+  transform: translate3d(-50%, -50%, 0);
+  will-change: transform;
+  transition: width .18s cubic-bezier(.25,1,.5,1),
+              height .18s cubic-bezier(.25,1,.5,1),
+              border-color .18s ease;
 }
-body.hovered #cursor-ring { width: 44px; height: 44px; border-color: rgba(160,100,255,.6); }
-body.clicked #cursor-dot  { width: 9px; height: 9px; background: var(--purple); }
+body.hovered #cursor-ring { width: 40px; height: 40px; border-color: rgba(160,100,255,.55); }
+body.clicked #cursor-dot  { width: 8px; height: 8px; background: var(--purple); }
 
 /* ══════════════════════════════════════════════════════
    APP SHELL
@@ -537,6 +541,7 @@ body.clicked #cursor-dot  { width: 9px; height: 9px; background: var(--purple); 
 #spectrum-canvas {
   display: block; width: 100%;
   height: 200px; padding: 0 16px;
+  contain: strict;
 }
 .waveform-row {
   padding: 0 16px 16px;
@@ -546,6 +551,7 @@ body.clicked #cursor-dot  { width: 9px; height: 9px; background: var(--purple); 
 #waveform-canvas {
   display: block; width: 100%;
   height: 48px; margin-top: 10px;
+  contain: strict;
 }
 
 /* Freq column */

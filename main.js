@@ -362,16 +362,21 @@
   /* ════════════════════════════════════════════════════
      7. CUSTOM CURSOR
   ════════════════════════════════════════════════════ */
-  let cX = 300, cY = 300, rX = 300, rY = 300;
-  document.addEventListener('mousemove', e => { cX = e.clientX; cY = e.clientY; });
+  let cX = 0, cY = 0, rX = 0, rY = 0, cursorReady = false;
+  document.addEventListener('mousemove', e => {
+    cX = e.clientX; cY = e.clientY;
+    if (!cursorReady) { rX = cX; rY = cY; cursorReady = true; }
+  }, { passive: true });
   document.addEventListener('mousedown', () => document.body.classList.add('clicked'));
   document.addEventListener('mouseup',   () => document.body.classList.remove('clicked'));
   document.addEventListener('mouseover', e => { if (e.target.closest('button,label,input,a,[role="slider"]')) document.body.classList.add('hovered'); });
   document.addEventListener('mouseout',  e => { if (e.target.closest('button,label,input,a,[role="slider"]')) document.body.classList.remove('hovered'); });
   function updateCursor() {
-    rX += (cX - rX) * 0.14; rY += (cY - rY) * 0.14;
-    if (els.curDot)  { els.curDot.style.left  = cX + 'px'; els.curDot.style.top  = cY + 'px'; }
-    if (els.curRing) { els.curRing.style.left = rX + 'px'; els.curRing.style.top = rY + 'px'; }
+    if (!cursorReady) return;
+    // Faster lerp (0.18) so ring feels snappy; use translate3d — GPU layer, no layout reflow
+    rX += (cX - rX) * 0.18; rY += (cY - rY) * 0.18;
+    if (els.curDot)  els.curDot.style.transform  = `translate3d(${cX - 2.5}px, ${cY - 2.5}px, 0)`;
+    if (els.curRing) els.curRing.style.transform  = `translate3d(${rX - 14}px, ${rY - 14}px, 0)`;
   }
 
   /* ════════════════════════════════════════════════════
@@ -808,26 +813,28 @@
     ctx.fillStyle = 'rgba(160,80,255,0.04)';
     ctx.fillRect(0, 0, W, H);
 
+    const playedGrad = ctx.createLinearGradient(0, H, 0, 0);
+    playedGrad.addColorStop(0, 'rgba(160,80,255,0.9)');
+    playedGrad.addColorStop(1, 'rgba(40,160,255,0.7)');
+
+    const unplayedGrad = ctx.createLinearGradient(0, H, 0, 0);
+    unplayedGrad.addColorStop(0, 'rgba(100,100,140,0.5)');
+    unplayedGrad.addColorStop(1, 'rgba(100,100,140,0.3)');
+
     // Draw waveform
+    const skip = Math.max(1, Math.floor(step / 30));
     for (let x = 0; x < W; x++) {
       let min = 1, max = -1;
       const off = x * step;
-      for (let i = 0; i < step; i++) {
+      for (let i = 0; i < step; i += skip) {
         const v = ch[Math.min(off + i, ch.length - 1)];
         if (v < min) min = v; if (v > max) max = v;
       }
       const dur = buf.duration;
       const timeSec = (x / W) * dur;
       const inRegion = timeSec >= trimStartSec && timeSec <= trimEndSec;
-      const gr = ctx.createLinearGradient(x, mid + max * mid, x, mid + min * mid);
-      if (inRegion) {
-        gr.addColorStop(0, 'rgba(160,80,255,0.9)');
-        gr.addColorStop(1, 'rgba(40,160,255,0.7)');
-      } else {
-        gr.addColorStop(0, 'rgba(100,100,140,0.5)');
-        gr.addColorStop(1, 'rgba(100,100,140,0.3)');
-      }
-      ctx.fillStyle = gr;
+      
+      ctx.fillStyle = inRegion ? playedGrad : unplayedGrad;
       ctx.fillRect(x, mid + min * mid, 1, Math.max(1, (max - min) * mid));
     }
 
@@ -1523,26 +1530,29 @@
     wfStaticCtx.fillStyle = 'rgba(160,80,255,0.03)';
     wfStaticCtx.fillRect(0, 0, W, H);
 
+    const playedGrad = wfStaticCtx.createLinearGradient(0, H, 0, 0);
+    playedGrad.addColorStop(0, 'rgba(160,80,255,0.95)');
+    playedGrad.addColorStop(1, 'rgba(40,160,255,0.80)');
+
+    const unplayedGrad = wfStaticCtx.createLinearGradient(0, H, 0, 0);
+    unplayedGrad.addColorStop(0, 'rgba(160,150,200,0.38)');
+    unplayedGrad.addColorStop(1, 'rgba(100,100,150,0.22)');
+
+    const skip = Math.max(1, Math.floor(((endSamp - startSamp) / W) / 30));
+
     for (let x = 0; x < W; x++) {
       const off  = startSamp + Math.floor((x / W) * (endSamp - startSamp));
       const step = Math.max(1, Math.floor((endSamp - startSamp) / W));
       let min = 0, max = 0;
-      for (let i = 0; i < step && (off + i) < ch.length; i++) {
+      for (let i = 0; i < step && (off + i) < ch.length; i += skip) {
         const v = ch[off + i];
         if (v < min) min = v;
         if (v > max) max = v;
       }
       const sampleSec = viewStart + (x / W) * (viewEnd - viewStart);
       const played    = sampleSec <= curSec;
-      const gr = wfStaticCtx.createLinearGradient(x, mid + max * mid * 0.88, x, mid + min * mid * 0.88);
-      if (played) {
-        gr.addColorStop(0, 'rgba(160,80,255,0.95)');
-        gr.addColorStop(1, 'rgba(40,160,255,0.80)');
-      } else {
-        gr.addColorStop(0, 'rgba(160,150,200,0.38)');
-        gr.addColorStop(1, 'rgba(100,100,150,0.22)');
-      }
-      wfStaticCtx.fillStyle = gr;
+      
+      wfStaticCtx.fillStyle = played ? playedGrad : unplayedGrad;
       wfStaticCtx.fillRect(x, mid + min * mid * 0.88, 1, Math.max(1, (max - min) * mid * 0.88));
     }
 
@@ -1768,7 +1778,8 @@
     if (uniforms) { uniforms.uTime.value = shaderTime; uniforms.uTheme.value = nebulaTheme; }
 
     let bands, freqData;
-    if (audio.isPlaying || (audio.analyser && audio.isMic)) { bands = audio.analyse(); freqData = audio.freqData; }
+    const isActive = audio.isPlaying || (audio.analyser && audio.isMic);
+    if (isActive) { bands = audio.analyse(); freqData = audio.freqData; }
     else { bands = idleBands(t); freqData = null; }
 
     if (uniforms) {
@@ -1777,11 +1788,17 @@
       uniforms.uTreble.value += (bands.treble - uniforms.uTreble.value) * .14;
     }
 
+    // Progress bar — every frame (lightweight DOM update)
     const ratio = updateProgress();
-    drawSpectrum(freqData, t);
-    if (frame % 2 === 0) drawWaveform(freqData, ratio);
 
-    if (frame % 2 === 0) {
+    // Spectrum — every 3 frames (heavy canvas draw)
+    if (frame % 3 === 0) drawSpectrum(freqData, t);
+
+    // Waveform — every 4 frames
+    if (frame % 4 === 0) drawWaveform(freqData, ratio);
+
+    // Gauges + DOM text — every 4 frames
+    if (frame % 4 === 0) {
       drawGauge(els.gaugeBass, 'bass', bands.bass);
       drawGauge(els.gaugeMid,  'mid',  bands.mid);
       drawGauge(els.gaugeTreb, 'treble', bands.treble);
@@ -1796,7 +1813,8 @@
       els.bpmVal.textContent  = detectBPM(bands.bass, t) || '—';
     }
 
-    if (frame % 10 === 0 && els.panelEq?.style.display !== 'none') {
+    // EQ curve — every 15 frames, only when panel is visible
+    if (frame % 15 === 0 && els.panelEq?.style.display !== 'none') {
       drawEqCurve(
         parseFloat(els.eqBass?.value     || 0),
         parseFloat(els.eqMid?.value      || 0),
@@ -1806,15 +1824,14 @@
       );
     }
 
-    // Refresh static waveform every 8 frames (seek cursor + played fill)
-    if (frame % 8 === 0 && currentIdx >= 0) {
+    // Static waveform — every 16 frames, only when playing
+    if (frame % 16 === 0 && currentIdx >= 0 && isActive) {
       drawStaticWaveform();
-      // Update wf-seek-cursor position
-      const t = tracks[currentIdx];
-      if (t && t.buffer && isPlaying) {
-        const dur  = t.buffer.duration;
+      const wt = tracks[currentIdx];
+      if (wt && wt.buffer && isPlaying) {
+        const dur  = wt.buffer.duration;
         const cur  = audio.getCurrentTime();
-        const viewFrac = 1 / wfZoom;
+        const viewFrac  = 1 / wfZoom;
         const viewStart = wfOffset * dur;
         const viewEnd   = viewStart + viewFrac * dur;
         const cursor = $('wf-seek-cursor');
@@ -1830,12 +1847,18 @@
       }
     }
 
-    if (frame % 60 === 0 && els.panelTrim?.style.display !== 'none') {
+    // Trim waveform — every 90 frames (very infrequent, only when panel open)
+    if (frame % 90 === 0 && els.panelTrim?.style.display !== 'none') {
       drawTrimWaveform();
     }
 
-    if (frame % 30 === 0) els.fpsEl.textContent = sampleFPS(now) + ' FPS';
+    // FPS counter — every 60 frames
+    if (frame % 60 === 0) els.fpsEl.textContent = sampleFPS(now) + ' FPS';
+
+    // Cursor — every frame (must be smooth)
     updateCursor();
+
+    // WebGL render — every frame
     if (renderer && scene && camera) renderer.render(scene, camera);
     frame++;
   }

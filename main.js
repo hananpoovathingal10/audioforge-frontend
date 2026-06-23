@@ -1436,7 +1436,7 @@
   /* ════════════════════════════════════════════════════
      23. DRAG AND DROP
   ════════════════════════════════════════════════════ */
-  window.addEventListener('dragover', e => e.preventDefault(), false);
+  window.addEventListener('dragover', e => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; }, false);
   window.addEventListener('dragenter', e => { e.preventDefault(); els.dropOver.classList.add('active'); }, false);
   window.addEventListener('dragleave', e => { if (!e.relatedTarget || e.relatedTarget.nodeName === 'HTML') els.dropOver.classList.remove('active'); }, false);
   window.addEventListener('drop', async e => {

@@ -977,7 +977,7 @@ body.clicked #cursor-dot  { width: 8px; height: 8px; background: var(--purple); 
   display: flex; align-items: center; justify-content: center;
   opacity: 0; pointer-events: none; transition: opacity .25s ease;
 }
-#drop-overlay.active { opacity: 1; pointer-events: all; }
+#drop-overlay.active { opacity: 1; pointer-events: none; }
 .drop-box {
   border: 1.5px dashed rgba(160,100,255,.5);
   border-radius: 24px; padding: 48px 64px;

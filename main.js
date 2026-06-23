@@ -125,11 +125,12 @@
     shuffle:    $('btn-shuffle'),
     fileIn:     $('file-input'),
     fileIn2:    $('file-input-2'),
+    fileUpload: $('file-upload'),
     srcFile:    $('src-file'),
     srcMic:     $('src-mic'),
     recDot:     $('rec-dot'),
     trackList:  $('track-list'),
-    trackEmpty: $('track-empty'),
+    trackEmpty: $('track-empty-state'),
     kanban:     $('kanban-board'),
     kanbanEmp:  $('kanban-empty'),
     libCount:   $('lib-count'),
@@ -419,7 +420,10 @@
   }
 
   els.srcFile.addEventListener('click', async () => {
-    if (sourceMode === 'file') return;
+    if (sourceMode === 'file') {
+      els.fileIn?.click();
+      return;
+    }
     if (audio.isRecording) await stopRecordingFlow();
     audio.stopMicStream();
     sourceMode = 'file'; setSourceMode('file'); setPlayUI(false);
@@ -713,8 +717,9 @@
   els.shuffle.addEventListener('click', () => { shuffleMode = !shuffleMode; els.shuffle.classList.toggle('active-chip', shuffleMode); });
 
   function handleFileChange(e) { const files = e.target.files; if (files?.length) loadFiles(files); e.target.value = ''; }
-  els.fileIn.addEventListener('change', handleFileChange);
+  els.fileIn?.addEventListener('change', handleFileChange);
   els.fileIn2?.addEventListener('change', handleFileChange);
+  els.fileUpload?.addEventListener('change', handleFileChange);
 
   /* ════════════════════════════════════════════════════
      15. VOLUME

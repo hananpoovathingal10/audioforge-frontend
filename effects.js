@@ -1,5 +1,5 @@
 /* =====================================================
-   AudioForge AI — Effects Engine
+   AudioForge AI — Effects Engine v2
    Reverb, Echo, Robot Voice, Radio Voice, Noise Gate
    ===================================================== */
 
@@ -201,8 +201,11 @@ class AudioEffects {
     if (!sourceBuffer) return null;
     await engine.init();
 
-    const rate   = sourceBuffer.sampleRate;
-    const length = sourceBuffer.length;
+    const rate    = sourceBuffer.sampleRate;
+    // Extend buffer to capture reverb/echo tail
+    const tailSec = this.activeEffects.reverb ? 5.0 :
+                    this.activeEffects.echo    ? this.echoDelaySec * 8 : 0;
+    const length  = sourceBuffer.length + Math.ceil(tailSec * rate);
     const offline = new OfflineAudioContext(
       sourceBuffer.numberOfChannels, length, rate
     );
@@ -210,9 +213,9 @@ class AudioEffects {
     const src = offline.createBufferSource();
     src.buffer = sourceBuffer;
 
-    // Build effect chain
     let currentNode = src;
 
+    // ── Robot voice ──────────────────────────────────
     if (this.activeEffects.robot) {
       const ringOsc = offline.createOscillator();
       const ringMod = offline.createGain();
@@ -225,31 +228,37 @@ class AudioEffects {
       ringOsc.start();
     }
 
+    // ── Radio voice ──────────────────────────────────
     if (this.activeEffects.radio) {
       const bp = offline.createBiquadFilter();
       bp.type            = 'bandpass';
       bp.frequency.value = 2000;
-      bp.Q.value         = 0.8;
+      bp.Q.value         = 1.2;
       const dist = offline.createWaveShaper();
-      dist.curve     = this._makeDistortionCurve(200);
-      dist.oversample = '2x';
+      dist.curve      = this._makeDistortionCurve(150);
+      dist.oversample = '4x';
       const hp = offline.createBiquadFilter();
       hp.type            = 'highpass';
       hp.frequency.value = 300;
+      // Recover gain lost in bandpass
+      const radioGain = offline.createGain();
+      radioGain.gain.value = 2.5;
       currentNode.connect(bp);
       bp.connect(dist);
       dist.connect(hp);
-      currentNode = hp;
+      hp.connect(radioGain);
+      currentNode = radioGain;
     }
 
+    // ── Reverb (dry/wet parallel) ─────────────────────
     if (this.activeEffects.reverb) {
       const convolver = offline.createConvolver();
-      const ir = this._buildOfflineImpulse(offline, 2.0, 2.5);
+      const ir = this._buildOfflineImpulse(offline, 3.0, 2.0);
       convolver.buffer = ir;
       const dryGain = offline.createGain();
       const wetGain = offline.createGain();
       dryGain.gain.value = 1 - this.reverbWet;
-      wetGain.gain.value = this.reverbWet;
+      wetGain.gain.value = this.reverbWet * 1.5; // compensate for wet level drop
       currentNode.connect(dryGain);
       currentNode.connect(convolver);
       convolver.connect(wetGain);
@@ -259,13 +268,14 @@ class AudioEffects {
       currentNode = merger;
     }
 
+    // ── Echo ─────────────────────────────────────────
     if (this.activeEffects.echo) {
       const delay    = offline.createDelay(5.0);
       const feedback = offline.createGain();
       const wet      = offline.createGain();
       delay.delayTime.value = this.echoDelaySec;
       feedback.gain.value   = this.echoFeedbackVal;
-      wet.gain.value        = 0.5;
+      wet.gain.value        = 0.6;
       currentNode.connect(delay);
       delay.connect(feedback);
       feedback.connect(delay);
@@ -276,7 +286,47 @@ class AudioEffects {
       currentNode = out;
     }
 
-    currentNode.connect(offline.destination);
+    // ── EQ + gain from engine (applied to export) ─────
+    const bass = offline.createBiquadFilter();
+    bass.type = 'lowshelf'; bass.frequency.value = 120;
+    bass.gain.value = engine.bassFilter ? engine.bassFilter.gain.value : 0;
+
+    const mid = offline.createBiquadFilter();
+    mid.type = 'peaking'; mid.frequency.value = 1000; mid.Q.value = 0.9;
+    mid.gain.value = engine.midFilter ? engine.midFilter.gain.value : 0;
+
+    const treble = offline.createBiquadFilter();
+    treble.type = 'peaking'; treble.frequency.value = 5000; treble.Q.value = 0.8;
+    treble.gain.value = engine.trebleFilter ? engine.trebleFilter.gain.value : 0;
+
+    const presence = offline.createBiquadFilter();
+    presence.type = 'peaking'; presence.frequency.value = 3500; presence.Q.value = 1.2;
+    presence.gain.value = engine.presenceFilter ? engine.presenceFilter.gain.value : 0;
+
+    const air = offline.createBiquadFilter();
+    air.type = 'highshelf'; air.frequency.value = 10000;
+    air.gain.value = engine.airFilter ? engine.airFilter.gain.value : 0;
+
+    const masterGain = offline.createGain();
+    masterGain.gain.value = Math.min(2, engine.volume * (engine.masterGain ? engine.masterGain.gain.value : 1));
+
+    // Limiter on output
+    // Limiter with Soft-Clipping
+    const limiter = offline.createDynamicsCompressor();
+    limiter.threshold.value = -1.0;
+    limiter.knee.value      = 6.0;
+    limiter.ratio.value     = 20.0;
+    limiter.attack.value    = 0.001;
+    limiter.release.value   = 0.1;
+
+    currentNode.connect(bass);
+    bass.connect(mid);
+    mid.connect(treble);
+    treble.connect(presence);
+    presence.connect(air);
+    air.connect(masterGain);
+    masterGain.connect(limiter);
+    limiter.connect(offline.destination);
     src.start(0);
 
     return offline.startRendering();
@@ -295,30 +345,28 @@ class AudioEffects {
     return ir;
   }
 
-  /* ── NOISE REDUCTION (Spectral Gate) ────────────────── */
+  /* ── NOISE REDUCTION (Envelope follower gate) ───────── */
   async applyNoiseReduction(buffer, threshold = 0.03) {
     if (!buffer) return null;
-    const offline = new OfflineAudioContext(
-      buffer.numberOfChannels,
-      buffer.length,
-      buffer.sampleRate
-    );
 
+    const rate = buffer.sampleRate;
+
+    // Step 1: HP filter + compressor via OfflineAudioContext
+    const offline = new OfflineAudioContext(
+      buffer.numberOfChannels, buffer.length, rate
+    );
     const src = offline.createBufferSource();
     src.buffer = buffer;
 
-    // High-pass filter to remove low-frequency noise
     const hp = offline.createBiquadFilter();
-    hp.type            = 'highpass';
-    hp.frequency.value = 80;
+    hp.type = 'highpass'; hp.frequency.value = 80; hp.Q.value = 0.7;
 
-    // Dynamics compressor acts as noise gate at low levels
     const comp = offline.createDynamicsCompressor();
-    comp.threshold.value = -50;
-    comp.knee.value      = 10;
-    comp.ratio.value     = 20;
-    comp.attack.value    = 0.001;
-    comp.release.value   = 0.25;
+    comp.threshold.value = -40;
+    comp.knee.value      = 6;
+    comp.ratio.value     = 8;
+    comp.attack.value    = 0.005;
+    comp.release.value   = 0.2;
 
     src.connect(hp);
     hp.connect(comp);
@@ -327,60 +375,74 @@ class AudioEffects {
 
     const rendered = await offline.startRendering();
 
-    // Apply sample-level gate
-    const gated = offline.createBuffer(
-      rendered.numberOfChannels,
-      rendered.length,
-      rendered.sampleRate
-    );
+    // Step 2: envelope-follower gate (smooth, not hard)
+    const result = new AudioBuffer({
+      numberOfChannels: rendered.numberOfChannels,
+      length:           rendered.length,
+      sampleRate:       rate
+    });
+
+    const attackSamples  = Math.floor(0.010 * rate); // 10ms attack
+    const releaseSamples = Math.floor(0.080 * rate); // 80ms release
 
     for (let ch = 0; ch < rendered.numberOfChannels; ch++) {
       const input  = rendered.getChannelData(ch);
-      const output = gated.getChannelData(ch);
+      const output = result.getChannelData(ch);
+      let envelope = 0;
       for (let i = 0; i < input.length; i++) {
-        output[i] = Math.abs(input[i]) > threshold ? input[i] : 0;
+        const abs = Math.abs(input[i]);
+        if (abs > envelope) {
+          envelope += (abs - envelope) / Math.max(1, attackSamples);
+        } else {
+          envelope += (abs - envelope) / Math.max(1, releaseSamples);
+        }
+        const gateGain = envelope > threshold ? 1.0 : Math.max(0, envelope / threshold);
+        output[i] = input[i] * gateGain;
       }
     }
 
-    return gated;
+    return result;
   }
 
   /* ── SILENCE REMOVAL ─────────────────────────────────── */
   removeSilence(buffer, threshold = 0.01, minSilenceDur = 0.3) {
     if (!buffer) return null;
-    const rate    = buffer.sampleRate;
-    const ch0     = buffer.getChannelData(0);
-    const minLen  = Math.floor(minSilenceDur * rate);
-    const chunks  = []; // {start, end} of non-silent regions
+    const rate   = buffer.sampleRate;
+    const ch0    = buffer.getChannelData(0);
+    const minLen = Math.floor(minSilenceDur * rate);
+    const chunks = []; // { start, end } of non-silent audio regions
 
-    let inSilence  = true;
-    let silStart   = 0;
-    let chunkStart = 0;
+    let regionStart = null;
+    let silenceStart = null;
 
     for (let i = 0; i < ch0.length; i++) {
-      const isSilent = Math.abs(ch0[i]) < threshold;
-      if (inSilence && !isSilent) {
-        chunkStart = i;
-        inSilence  = false;
-      } else if (!inSilence && isSilent) {
-        silStart  = i;
-        inSilence = true;
-      } else if (inSilence && (i - silStart) > minLen && !isSilent) {
-        // End of long silence
-        chunks.push({ start: chunkStart, end: silStart });
-        chunkStart = i;
-        inSilence  = false;
+      const silent = Math.abs(ch0[i]) < threshold;
+
+      if (!silent) {
+        // We're in audio
+        if (regionStart === null) regionStart = i;
+        silenceStart = null;
+      } else {
+        // We're in silence
+        if (silenceStart === null) silenceStart = i;
+        // If silence is long enough, end the current region
+        if (regionStart !== null && (i - silenceStart) >= minLen) {
+          chunks.push({ start: regionStart, end: silenceStart });
+          regionStart  = null;
+          silenceStart = null;
+        }
       }
     }
-    if (!inSilence) chunks.push({ start: chunkStart, end: ch0.length });
+    // Don't forget the last region
+    if (regionStart !== null) {
+      chunks.push({ start: regionStart, end: ch0.length });
+    }
 
     if (!chunks.length) return buffer;
 
-    // Calculate total non-silent length
     const totalLen = chunks.reduce((s, c) => s + (c.end - c.start), 0);
     if (totalLen < 1) return buffer;
 
-    // Build new buffer from non-silent chunks
     const result = new AudioBuffer({
       numberOfChannels: buffer.numberOfChannels,
       length:           totalLen,

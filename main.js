@@ -73,6 +73,12 @@
   let shuffleMode = false;
   let sourceMode  = 'file';
 
+  // Waveform zoom
+  let wfZoom       = 1.0;   // 1× = full track, 8× = 8× magnification
+  let wfOffset     = 0.0;   // normalised scroll offset [0,1)
+  let wfStaticCtx  = null;  // 2D context for the PCM seek canvas
+  let wfSeekDragging = false;
+
   // Trim state
   let trimStartSec = 0;
   let trimEndSec   = 0;
@@ -89,7 +95,7 @@
   let mixVoiceBuffer = null;
   let mixMusicBuffer = null;
 
-  const DEFAULT_SETTINGS = { bass: 0, mid: 0, treble: 0, pitch: 0, speed: 1, volume: 85 };
+  const DEFAULT_SETTINGS = { bass: 0, mid: 0, presence: 0, treble: 0, air: 0, pitch: 0, speed: 1, volume: 85 };
 
   function mergeSettings(settings) {
     return { ...DEFAULT_SETTINGS, ...(settings || {}) };
@@ -131,7 +137,9 @@
     eqVol:      $('eq-volume'),
     eqBass:     $('eq-bass'),
     eqMid:      $('eq-mid'),
+    eqPresence: $('eq-presence'),
     eqTreble:   $('eq-treble'),
+    eqAir:      $('eq-air'),
     eqPitch:    $('eq-pitch'),
     eqSpeed:    $('eq-speed'),
     eqSmooth:   $('eq-smooth'),
@@ -140,7 +148,9 @@
     eqVolVal:   $('eq-vol-val'),
     eqBassVal:  $('eq-bass-val'),
     eqMidVal:   $('eq-mid-val'),
+    eqPresenceVal: $('eq-presence-val'),
     eqTrebVal:  $('eq-treble-val'),
+    eqAirVal:   $('eq-air-val'),
     eqPitchVal: $('eq-pitch-val'),
     eqSpeedVal: $('eq-speed-val'),
     eqSmoVal:   $('eq-smooth-val'),
@@ -225,6 +235,16 @@
     wCtx  = els.waveCanvas?.getContext('2d');
     eqCtx = els.eqCanvas?.getContext('2d');
     npCtx = els.npCanvas?.getContext('2d');
+
+    // Static waveform / seek canvas
+    const wfSc = $('wf-static-canvas');
+    if (wfSc) {
+      const r = wfSc.getBoundingClientRect();
+      wfSc.width  = (r.width  || 800) * Math.min(window.devicePixelRatio, 2);
+      wfSc.height = (r.height || 58)  * Math.min(window.devicePixelRatio, 2);
+      wfStaticCtx = wfSc.getContext('2d');
+      drawStaticWaveform();
+    }
 
     // Trim canvas
     const tc = $('trim-canvas');
@@ -566,6 +586,11 @@
     };
     setPlayUI(true);
     drawNpCover(idx);
+    drawStaticWaveform();
+
+    // Update transcription track name
+    const ttn = $('transcribe-track-name');
+    if (ttn) ttn.textContent = `${t.name} (“Transcribe Current Track” to generate transcript)`;
   }
 
   /* ════════════════════════════════════════════════════
@@ -575,13 +600,17 @@
     const s = mergeSettings(settings);
     if (els.eqBass)   els.eqBass.value   = s.bass;
     if (els.eqMid)    els.eqMid.value    = s.mid;
+    if (els.eqPresence) els.eqPresence.value = s.presence;
     if (els.eqTreble) els.eqTreble.value = s.treble;
+    if (els.eqAir)    els.eqAir.value    = s.air;
     if (els.eqPitch)  els.eqPitch.value  = s.pitch;
     if (els.eqSpeed)  els.eqSpeed.value  = Math.round(s.speed * 100);
     if (els.eqVol)    els.eqVol.value    = s.volume;
     if (els.eqBassVal) els.eqBassVal.textContent   = (s.bass   >= 0 ? '+' : '') + s.bass.toFixed(1)   + ' dB';
     if (els.eqMidVal)  els.eqMidVal.textContent    = (s.mid    >= 0 ? '+' : '') + s.mid.toFixed(1)    + ' dB';
+    if (els.eqPresenceVal) els.eqPresenceVal.textContent = (s.presence >= 0 ? '+' : '') + s.presence.toFixed(1) + ' dB';
     if (els.eqTrebVal) els.eqTrebVal.textContent   = (s.treble >= 0 ? '+' : '') + s.treble.toFixed(1) + ' dB';
+    if (els.eqAirVal)  els.eqAirVal.textContent    = (s.air    >= 0 ? '+' : '') + s.air.toFixed(1)    + ' dB';
     if (els.eqPitchVal) els.eqPitchVal.textContent = (s.pitch  >= 0 ? '+' : '') + s.pitch.toFixed(1)  + ' st';
     if (els.eqSpeedVal) els.eqSpeedVal.textContent = s.speed.toFixed(2) + '×';
     setVolume(s.volume);
@@ -700,7 +729,9 @@
   els.eqVol?.addEventListener('input', () => { setVolume(parseInt(els.eqVol.value, 10)); scheduleSaveSettings(); });
   els.eqBass?.addEventListener('input', () => { const v = parseFloat(els.eqBass.value); audio.setBass(v); els.eqBassVal.textContent = (v>=0?'+':'')+v.toFixed(1)+' dB'; scheduleSaveSettings(); });
   els.eqMid?.addEventListener('input', () => { const v = parseFloat(els.eqMid.value); audio.setMid(v); els.eqMidVal.textContent = (v>=0?'+':'')+v.toFixed(1)+' dB'; scheduleSaveSettings(); });
+  els.eqPresence?.addEventListener('input', () => { const v = parseFloat(els.eqPresence.value); audio.setPresence(v); els.eqPresenceVal.textContent = (v>=0?'+':'')+v.toFixed(1)+' dB'; scheduleSaveSettings(); });
   els.eqTreble?.addEventListener('input', () => { const v = parseFloat(els.eqTreble.value); audio.setTreble(v); els.eqTrebVal.textContent = (v>=0?'+':'')+v.toFixed(1)+' dB'; scheduleSaveSettings(); });
+  els.eqAir?.addEventListener('input', () => { const v = parseFloat(els.eqAir.value); audio.setAir(v); els.eqAirVal.textContent = (v>=0?'+':'')+v.toFixed(1)+' dB'; scheduleSaveSettings(); });
   els.eqPitch?.addEventListener('input', () => { const v = parseFloat(els.eqPitch.value); audio.setPitch(v); els.eqPitchVal.textContent = (v>=0?'+':'')+v.toFixed(1)+' st'; if(currentIdx>=0&&isPlaying) audio.restartWithCurrentEffects(tracks[currentIdx]?.buffer); scheduleSaveSettings(); });
   els.eqSpeed?.addEventListener('input', () => { const rate = parseInt(els.eqSpeed.value,10)/100; audio.setPlaybackSpeed(rate); els.eqSpeedVal.textContent = rate.toFixed(2)+'×'; if(currentIdx>=0&&isPlaying) audio.restartWithCurrentEffects(tracks[currentIdx]?.buffer); scheduleSaveSettings(); });
   els.eqSmooth?.addEventListener('input', () => { const v = parseInt(els.eqSmooth.value,10); if(audio.analyser) audio.analyser.smoothingTimeConstant = v/100; els.eqSmoVal.textContent = v+'%'; });
@@ -728,19 +759,25 @@
     if (currentIdx < 0) { showToast('Load a track before exporting'); return; }
     const t = tracks[currentIdx];
     if (!t.buffer) { showToast('Wait for track to finish loading'); return; }
-    showToast('Rendering audio…');
+    const fmt = els.exportFmt?.value || 'wav';
+    showToast(`Rendering audio (${fmt.toUpperCase()})…`);
     try {
       const fadeIn  = parseFloat(els.eqFadeIn?.value || 0);
       const fadeOut = parseFloat(els.eqFadeOut?.value || 0);
       let buf = await audio.renderProcessedAudio(t.buffer);
       if (fadeIn > 0 || fadeOut > 0) buf = await fx.applyFade(buf, fadeIn, fadeOut);
-      const blob = audio.audioBufferToWav(buf);
+      let blob;
+      if (fmt === 'mp3') {
+        blob = audio.audioBufferToMp3(buf, 192);
+      } else {
+        blob = audio.audioBufferToWav(buf, true);
+      }
       if (!blob) { showToast('⚠ Export failed'); return; }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a'); a.href = url;
-      a.download = `${t.name || 'edited'}_edited.wav`; a.click();
+      a.download = `${t.name || 'edited'}_edited.${fmt}`; a.click();
       URL.revokeObjectURL(url);
-      showToast('✓ Audio downloaded');
+      showToast(`✓ Audio downloaded as ${fmt.toUpperCase()}`);
     } catch (err) { console.error('Export failed:', err); showToast('⚠ Export failed'); }
   }
 
@@ -907,12 +944,13 @@
     showToast('Exporting trimmed audio…');
     const trimmed = audio.trimBuffer(buf, trimStartSec, trimEndSec);
     if (!trimmed) { showToast('⚠ Trim failed'); return; }
-    const blob = audio.audioBufferToWav(trimmed);
+    const fmt = els.exportFmt?.value || 'wav';
+    const blob = fmt === 'mp3' ? audio.audioBufferToMp3(trimmed, 192) : audio.audioBufferToWav(trimmed, true);
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url;
-    a.download = `${tracks[currentIdx].name || 'trimmed'}_trimmed.wav`; a.click();
+    a.download = `${tracks[currentIdx].name || 'trimmed'}_trimmed.${fmt}`; a.click();
     URL.revokeObjectURL(url);
-    showToast('✓ Trimmed audio downloaded');
+    showToast(`✓ Trimmed audio downloaded (${fmt.toUpperCase()})`);
   });
 
   $('btn-trim-reset')?.addEventListener('click', () => {
@@ -989,7 +1027,7 @@
     try {
       const merged = audio.mergeBuffers(allBufs, mergeMode);
       if (!merged) { showToast('⚠ Merge failed'); return; }
-      const blob = audio.audioBufferToWav(merged);
+      const blob = audio.audioBufferToWav(merged, true);
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a'); a.href = url;
       a.download = `merged_${mergeMode}_${Date.now()}.wav`; a.click();
@@ -1076,7 +1114,7 @@
   $('btn-mix-export')?.addEventListener('click', async () => {
     const mixed = await doMix(false);
     if (!mixed) return;
-    const blob = audio.audioBufferToWav(mixed);
+    const blob = audio.audioBufferToWav(mixed, true);
     const url  = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url;
     a.download = `mix_${Date.now()}.wav`; a.click();
@@ -1147,19 +1185,20 @@
   $('btn-effects-apply')?.addEventListener('click', async () => {
     const buf = currentIdx >= 0 ? tracks[currentIdx]?.buffer : null;
     if (!buf) { showToast('Load a track first'); return; }
-    showToast('Rendering with effects…');
+    const fmt = els.exportFmt?.value || 'wav';
+    showToast(`Rendering with effects (${fmt.toUpperCase()})…`);
     try {
       let processed = await fx.renderWithEffects(buf, audio);
       // Apply AI enhance if checked
       if ($('toggle-enhance')?.checked) {
         processed = await fx.applyNoiseReduction(processed, 0.02);
       }
-      const blob = audio.audioBufferToWav(processed);
+      const blob = fmt === 'mp3' ? audio.audioBufferToMp3(processed, 192) : audio.audioBufferToWav(processed, true);
       const url  = URL.createObjectURL(blob);
       const a = document.createElement('a'); a.href = url;
-      a.download = `${tracks[currentIdx].name || 'fx'}_effects.wav`; a.click();
+      a.download = `${tracks[currentIdx].name || 'fx'}_effects.${fmt}`; a.click();
       URL.revokeObjectURL(url);
-      showToast('✓ Effects applied and downloaded!');
+      showToast(`✓ Effects applied and downloaded (${fmt.toUpperCase()})!`);
     } catch (err) { console.error('Effects render error:', err); showToast('⚠ Effects render failed'); }
   });
 
@@ -1282,6 +1321,77 @@
   });
 
   /* ════════════════════════════════════════════════════
+     21b. AI TRANSCRIPTION (Whisper)
+  ════════════════════════════════════════════════════ */
+  $('btn-transcribe-track')?.addEventListener('click', async () => {
+    if (currentIdx < 0 || !tracks[currentIdx]) {
+      showToast('⚠ Load a track first'); return;
+    }
+    const t = tracks[currentIdx];
+    if (!t.buffer && !t.url) { showToast('⚠ Track has no audio data'); return; }
+
+    // Convert current buffer to WAV blob for upload
+    let blob;
+    try {
+      const buf = t.buffer;
+      if (!buf) { showToast('⚠ Track not loaded into memory yet. Click play first.'); return; }
+      blob = audio.audioBufferToWav(buf, false);
+    } catch { showToast('⚠ Failed to prepare audio'); return; }
+
+    const progress = $('transcribe-progress');
+    const status   = $('transcribe-status');
+    const btn      = $('btn-transcribe-track');
+    const row      = $('transcribe-file-row');
+
+    if (progress) progress.style.display = 'flex';
+    if (row)      row.style.opacity       = '0.4';
+    if (btn)      btn.disabled             = true;
+    if (status)   status.textContent       = '';
+
+    showToast('🤖 Sending to Whisper AI…');
+    try {
+      const form = new FormData();
+      form.append('audio', blob, `${t.name || 'track'}.wav`);
+      const res = await fetch('/api/transcribe', { method: 'POST', body: form });
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error || 'Transcription failed');
+
+      // Populate transcript box
+      const fullText = data.text || '';
+      const textEl   = $('transcript-text');
+      const ph       = $('transcript-placeholder');
+      const interim  = $('transcript-interim');
+      if (textEl) textEl.textContent = fullText;
+      if (ph)     ph.style.display   = fullText ? 'none' : '';
+      if (interim) interim.textContent = '';
+      if (tEngine) tEngine.transcript = fullText;
+
+      // Switch to transcript panel and show result
+      setPanel('transcript');
+      if (status) status.textContent = `✓ ${data.language?.toUpperCase() || 'EN'} · ${Math.round(data.duration || 0)}s`;
+      showToast(`✓ Transcribed ${Math.round(data.duration || 0)}s of ${data.language || 'speech'}`);
+    } catch (err) {
+      console.error('[Transcribe]', err);
+      showToast(`⚠ Transcription failed: ${err.message}`);
+      if (status) status.textContent = '⚠ ' + err.message;
+    } finally {
+      if (progress) progress.style.display = 'none';
+      if (row)      row.style.opacity       = '1';
+      if (btn)      btn.disabled             = false;
+    }
+  });
+
+  // Check if transcription is available
+  fetch('/api/config').then(r => r.json()).then(cfg => {
+    const btn = $('btn-transcribe-track');
+    if (!cfg.transcribeAvailable && btn) {
+      btn.title = 'Set OPENAI_API_KEY on the server to enable AI transcription';
+      btn.style.opacity = '0.5';
+    }
+  }).catch(() => {});
+
+  /* ════════════════════════════════════════════════════
      22. PROGRESS BAR
   ════════════════════════════════════════════════════ */
   function updateProgress() {
@@ -1372,6 +1482,118 @@
   els.specBars?.addEventListener('click', () => { specViewMode = 'bars'; els.specBars.classList.add('active-chip'); els.specMode.classList.remove('active-chip'); });
   els.specMode?.addEventListener('click', () => { specViewMode = 'fft'; els.specMode.classList.add('active-chip'); els.specBars.classList.remove('active-chip'); });
 
+  /* ── Waveform zoom slider ───────────────────────────── */
+  $('wf-zoom')?.addEventListener('input', (e) => {
+    wfZoom = parseFloat(e.target.value);
+    const zv = $('wf-zoom-val');
+    if (zv) zv.textContent = wfZoom.toFixed(2).replace(/\.?0+$/, '') + '×';
+    drawStaticWaveform();
+  });
+
+  /* ── Static PCM waveform (click-to-seek) ───────────── */
+  function drawStaticWaveform() {
+    const wfSc = $('wf-static-canvas');
+    if (!wfSc || !wfStaticCtx) return;
+    const W = wfSc.width, H = wfSc.height;
+    wfStaticCtx.clearRect(0, 0, W, H);
+
+    const buf = currentIdx >= 0 ? tracks[currentIdx]?.buffer : null;
+    if (!buf) {
+      wfStaticCtx.fillStyle = 'rgba(160,80,255,0.05)';
+      wfStaticCtx.fillRect(0, 0, W, H);
+      wfStaticCtx.fillStyle = 'rgba(255,255,255,0.10)';
+      const dpr = Math.min(window.devicePixelRatio, 2);
+      wfStaticCtx.font = `${11 * dpr}px Inter, sans-serif`;
+      wfStaticCtx.textAlign = 'center';
+      wfStaticCtx.fillText('Load a track to see waveform — click to seek', W / 2, H / 2 + 4 * dpr);
+      return;
+    }
+
+    const ch       = buf.getChannelData(0);
+    const dur      = buf.duration;
+    const viewFrac = 1 / wfZoom;
+    const startSamp = Math.floor(wfOffset * ch.length);
+    const endSamp   = Math.min(ch.length, Math.floor((wfOffset + viewFrac) * ch.length));
+    const mid       = H / 2;
+    const curSec    = audio.getCurrentTime() || 0;
+    const viewStart = wfOffset * dur;
+    const viewEnd   = viewStart + viewFrac * dur;
+
+    // Background
+    wfStaticCtx.fillStyle = 'rgba(160,80,255,0.03)';
+    wfStaticCtx.fillRect(0, 0, W, H);
+
+    for (let x = 0; x < W; x++) {
+      const off  = startSamp + Math.floor((x / W) * (endSamp - startSamp));
+      const step = Math.max(1, Math.floor((endSamp - startSamp) / W));
+      let min = 0, max = 0;
+      for (let i = 0; i < step && (off + i) < ch.length; i++) {
+        const v = ch[off + i];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      const sampleSec = viewStart + (x / W) * (viewEnd - viewStart);
+      const played    = sampleSec <= curSec;
+      const gr = wfStaticCtx.createLinearGradient(x, mid + max * mid * 0.88, x, mid + min * mid * 0.88);
+      if (played) {
+        gr.addColorStop(0, 'rgba(160,80,255,0.95)');
+        gr.addColorStop(1, 'rgba(40,160,255,0.80)');
+      } else {
+        gr.addColorStop(0, 'rgba(160,150,200,0.38)');
+        gr.addColorStop(1, 'rgba(100,100,150,0.22)');
+      }
+      wfStaticCtx.fillStyle = gr;
+      wfStaticCtx.fillRect(x, mid + min * mid * 0.88, 1, Math.max(1, (max - min) * mid * 0.88));
+    }
+
+    // Centre line
+    wfStaticCtx.strokeStyle = 'rgba(255,255,255,0.05)';
+    wfStaticCtx.lineWidth = 1;
+    wfStaticCtx.beginPath();
+    wfStaticCtx.moveTo(0, mid);
+    wfStaticCtx.lineTo(W, mid);
+    wfStaticCtx.stroke();
+  }
+
+  // Click-to-seek on static waveform
+  const wfSeekWrap = $('wf-seek-wrap');
+  function seekFromWfEvent(e) {
+    const buf = currentIdx >= 0 ? tracks[currentIdx]?.buffer : null;
+    if (!buf || !wfSeekWrap) return;
+    const rect   = wfSeekWrap.getBoundingClientRect();
+    const ratio  = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+    const viewFrac = 1 / wfZoom;
+    const seekSec  = (wfOffset + ratio * viewFrac) * buf.duration;
+    audio.pausedAt = seekSec;
+    if (isPlaying) { audio.stopSource(); audio.play(buf, seekSec); }
+    const cursor = $('wf-seek-cursor');
+    if (cursor) { cursor.style.left = (ratio * 100).toFixed(1) + '%'; cursor.style.display = 'block'; }
+    const lbl = $('wf-seek-label');
+    if (lbl) lbl.textContent = fmt(seekSec);
+    drawStaticWaveform();
+  }
+  if (wfSeekWrap) {
+    wfSeekWrap.addEventListener('mousedown',   e  => { wfSeekDragging = true;  seekFromWfEvent(e); });
+    document.addEventListener('mousemove',     e  => { if (wfSeekDragging) seekFromWfEvent(e); });
+    document.addEventListener('mouseup',       ()  => { wfSeekDragging = false; });
+    wfSeekWrap.addEventListener('touchstart',  e  => { wfSeekDragging = true;  seekFromWfEvent(e.touches[0]); }, { passive: true });
+    document.addEventListener('touchmove',     e  => { if (wfSeekDragging) seekFromWfEvent(e.touches[0]); }, { passive: true });
+    document.addEventListener('touchend',      () => { wfSeekDragging = false; });
+  }
+
+  /* ── Voice Compressor controls ──────────────────────── */
+  function syncCompressor() {
+    const enabled   = $('toggle-compressor')?.checked  || false;
+    const threshold = parseInt($('comp-threshold')?.value || -24, 10);
+    const ratio     = parseFloat($('comp-ratio')?.value   || 4);
+    const tv = $('comp-threshold-val'); if (tv) tv.textContent = threshold + ' dB';
+    const rv = $('comp-ratio-val');     if (rv) rv.textContent = ratio.toFixed(1) + ':1';
+    audio.setCompressor(enabled, { threshold, ratio, knee: 6 });
+  }
+  $('toggle-compressor')?.addEventListener('change', syncCompressor);
+  $('comp-threshold')?.addEventListener('input',     syncCompressor);
+  $('comp-ratio')?.addEventListener('input',         syncCompressor);
+
   function drawSpectrum(freqData, t) {
     if (!sCtx) return;
     const W = els.specCanvas.width, H = els.specCanvas.height;
@@ -1443,22 +1665,33 @@
     }
   }
 
-  function drawEqCurve(bassDb, midDb, trebleDb) {
+  function drawEqCurve(bassDb, midDb, trebleDb, presenceDb = 0, airDb = 0) {
     if (!eqCtx || !els.eqCanvas) return;
     const W = els.eqCanvas.width, H = els.eqCanvas.height;
     eqCtx.clearRect(0, 0, W, H);
+    // Grid
     eqCtx.strokeStyle = 'rgba(255,255,255,0.04)'; eqCtx.lineWidth = 1;
     for (let g = 0; g <= 4; g++) { const y = (g/4)*H; eqCtx.beginPath(); eqCtx.moveTo(0,y); eqCtx.lineTo(W,y); eqCtx.stroke(); }
     eqCtx.strokeStyle = 'rgba(255,255,255,0.08)'; eqCtx.beginPath(); eqCtx.moveTo(0,H/2); eqCtx.lineTo(W,H/2); eqCtx.stroke();
+
     const grad = eqCtx.createLinearGradient(0,0,W,0);
-    grad.addColorStop(0,'hsla(260,82%,68%,0.9)'); grad.addColorStop(0.4,'hsla(192,92%,60%,0.9)'); grad.addColorStop(1,'hsla(155,68%,55%,0.9)');
+    grad.addColorStop(0,    'hsla(260,82%,68%,0.9)');
+    grad.addColorStop(0.3,  'hsla(192,92%,60%,0.9)');
+    grad.addColorStop(0.65, 'hsla(200,82%,65%,0.9)');
+    grad.addColorStop(1,    'hsla(155,68%,55%,0.9)');
+
     eqCtx.beginPath();
     for (let i = 0; i < W; i++) {
+      // Logarithmic frequency mapping 20Hz – 20kHz
       const f = 20 * Math.pow(1000, i / W);
-      const bassC   = Math.exp(-Math.pow(Math.log10(f/120),  2) * 3) * bassDb;
-      const midC    = Math.exp(-Math.pow(Math.log10(f/1200), 2) * 2) * midDb;
-      const trebleC = Math.exp(-Math.pow(Math.log10(f/8000), 2) * 2) * trebleDb;
-      const y = H/2 - ((bassC + midC + trebleC) / 15) * (H/2 - 4);
+      // Each band: Gaussian approximation of biquad response
+      const bassC     = Math.exp(-Math.pow(Math.log10(f / 100),  2) * 3.5)  * bassDb;
+      const midC      = Math.exp(-Math.pow(Math.log10(f / 800),  2) * 3.0)  * midDb;
+      const presenceC = Math.exp(-Math.pow(Math.log10(f / 3500), 2) * 4.0)  * presenceDb;
+      const trebleC   = Math.exp(-Math.pow(Math.log10(f / 5000), 2) * 2.5)  * trebleDb;
+      const airC      = Math.exp(-Math.pow(Math.log10(f / 12000), 2) * 3.0) * airDb;
+      const total     = bassC + midC + presenceC + trebleC + airC;
+      const y = H/2 - (total / 15) * (H/2 - 4);
       i === 0 ? eqCtx.moveTo(0, y) : eqCtx.lineTo(i, y);
     }
     eqCtx.strokeStyle = grad; eqCtx.lineWidth = 2;
@@ -1564,7 +1797,37 @@
     }
 
     if (frame % 10 === 0 && els.panelEq?.style.display !== 'none') {
-      drawEqCurve(parseFloat(els.eqBass?.value || 0), parseFloat(els.eqMid?.value || 0), parseFloat(els.eqTreble?.value || 0));
+      drawEqCurve(
+        parseFloat(els.eqBass?.value     || 0),
+        parseFloat(els.eqMid?.value      || 0),
+        parseFloat(els.eqTreble?.value   || 0),
+        parseFloat(els.eqPresence?.value || 0),
+        parseFloat(els.eqAir?.value      || 0)
+      );
+    }
+
+    // Refresh static waveform every 8 frames (seek cursor + played fill)
+    if (frame % 8 === 0 && currentIdx >= 0) {
+      drawStaticWaveform();
+      // Update wf-seek-cursor position
+      const t = tracks[currentIdx];
+      if (t && t.buffer && isPlaying) {
+        const dur  = t.buffer.duration;
+        const cur  = audio.getCurrentTime();
+        const viewFrac = 1 / wfZoom;
+        const viewStart = wfOffset * dur;
+        const viewEnd   = viewStart + viewFrac * dur;
+        const cursor = $('wf-seek-cursor');
+        const lbl    = $('wf-seek-label');
+        if (cursor && cur >= viewStart && cur <= viewEnd) {
+          const pct = ((cur - viewStart) / (viewEnd - viewStart)) * 100;
+          cursor.style.left    = pct.toFixed(1) + '%';
+          cursor.style.display = 'block';
+          if (lbl) lbl.textContent = fmt(cur);
+        } else if (cursor) {
+          cursor.style.display = 'none';
+        }
+      }
     }
 
     if (frame % 60 === 0 && els.panelTrim?.style.display !== 'none') {

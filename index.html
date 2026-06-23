@@ -10,6 +10,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono&display=swap" rel="stylesheet" />
   <script type="module" src="/three-global.js"></script>
+  <!-- lamejs: in-browser MP3 encoder -->
+  <script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js"></script>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -208,6 +210,20 @@
             <div class="waveform-row">
               <canvas id="waveform-canvas"></canvas>
             </div>
+            <!-- Static PCM waveform with click-to-seek + zoom -->
+            <div class="waveform-controls-row" id="waveform-controls-row">
+              <div class="wf-seek-wrap" id="wf-seek-wrap" title="Click to seek">
+                <canvas id="wf-static-canvas"></canvas>
+                <div id="wf-seek-cursor"></div>
+                <div id="wf-seek-label">0:00</div>
+              </div>
+              <div class="wf-zoom-row">
+                <svg viewBox="0 0 20 20" fill="currentColor" style="width:12px;height:12px;color:var(--text-4)"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>
+                <input type="range" id="wf-zoom" class="mix-vol-slider" min="1" max="8" value="1" step="0.25" title="Waveform zoom" style="flex:1;" />
+                <svg viewBox="0 0 20 20" fill="currentColor" style="width:12px;height:12px;color:var(--text-4)"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 000 2h6a1 1 0 100-2H7z" clip-rule="evenodd"/></svg>
+                <span style="font-size:.7rem;color:var(--text-4);min-width:32px" id="wf-zoom-val">1×</span>
+              </div>
+            </div>
           </div>
 
           <!-- Freq panels column -->
@@ -250,6 +266,7 @@
               <select id="export-format" class="settings-select" style="padding:4px 10px;font-size:.72rem">
                 <option value="wav">WAV</option>
                 <option value="webm">WebM</option>
+                <option value="mp3">MP3 (192k)</option>
               </select>
               <button class="chip-btn" id="eq-export-btn" title="Download processed audio">Export</button>
               <button class="chip-btn" id="eq-save-btn">Save</button>
@@ -261,9 +278,9 @@
             <div class="eq-band">
               <div class="eq-band-top"><span class="eq-label">VOLUME</span><span class="eq-value" id="eq-vol-val">85%</span></div>
               <div class="eq-slider-wrap">
-                <input type="range" class="eq-slider vol-color" id="eq-volume" min="0" max="100" value="85" step="1" />
+                <input type="range" class="eq-slider vol-color" id="eq-volume" min="0" max="200" value="85" step="1" />
               </div>
-              <div class="eq-band-bot"><span>0%</span><span>Gain</span><span>100%</span></div>
+              <div class="eq-band-bot"><span>0%</span><span>Gain</span><span>200%</span></div>
             </div>
             <!-- Bass -->
             <div class="eq-band">
@@ -275,25 +292,37 @@
             <div class="eq-band">
               <div class="eq-band-top"><span class="eq-label mid-col">MID</span><span class="eq-value" id="eq-mid-val">0 dB</span></div>
               <div class="eq-slider-wrap"><input type="range" class="eq-slider mid-color" id="eq-mid" min="-15" max="15" value="0" step="0.5" /></div>
-              <div class="eq-band-bot"><span>-15 dB</span><span>250–4k Hz</span><span>+15 dB</span></div>
+              <div class="eq-band-bot"><span>-15 dB</span><span>250–2k Hz</span><span>+15 dB</span></div>
+            </div>
+            <!-- Presence -->
+            <div class="eq-band">
+              <div class="eq-band-top"><span class="eq-label presence-col">PRESENCE</span><span class="eq-value" id="eq-presence-val">0 dB</span></div>
+              <div class="eq-slider-wrap"><input type="range" class="eq-slider presence-color" id="eq-presence" min="-15" max="15" value="0" step="0.5" /></div>
+              <div class="eq-band-bot"><span>-15 dB</span><span>2k–4k Hz</span><span>+15 dB</span></div>
             </div>
             <!-- Treble -->
             <div class="eq-band">
               <div class="eq-band-top"><span class="eq-label treble-col">TREBLE</span><span class="eq-value" id="eq-treble-val">0 dB</span></div>
               <div class="eq-slider-wrap"><input type="range" class="eq-slider treble-color" id="eq-treble" min="-15" max="15" value="0" step="0.5" /></div>
-              <div class="eq-band-bot"><span>-15 dB</span><span>4k–16k Hz</span><span>+15 dB</span></div>
+              <div class="eq-band-bot"><span>-15 dB</span><span>4k–8k Hz</span><span>+15 dB</span></div>
+            </div>
+            <!-- Air -->
+            <div class="eq-band">
+              <div class="eq-band-top"><span class="eq-label air-col">AIR</span><span class="eq-value" id="eq-air-val">0 dB</span></div>
+              <div class="eq-slider-wrap"><input type="range" class="eq-slider air-color" id="eq-air" min="-15" max="15" value="0" step="0.5" /></div>
+              <div class="eq-band-bot"><span>-15 dB</span><span>8k–20k Hz</span><span>+15 dB</span></div>
             </div>
             <!-- Pitch -->
             <div class="eq-band">
               <div class="eq-band-top"><span class="eq-label" style="color:hsl(280,80%,70%)">PITCH</span><span class="eq-value" id="eq-pitch-val">0 st</span></div>
-              <div class="eq-slider-wrap"><input type="range" class="eq-slider" id="eq-pitch" min="-12" max="12" value="0" step="0.5" /></div>
-              <div class="eq-band-bot"><span>-12 st</span><span>Shift pitch</span><span>+12 st</span></div>
+              <div class="eq-slider-wrap"><input type="range" class="eq-slider" id="eq-pitch" min="-24" max="24" value="0" step="0.5" /></div>
+              <div class="eq-band-bot"><span>-24 st</span><span>Shift pitch</span><span>+24 st</span></div>
             </div>
             <!-- Speed -->
             <div class="eq-band">
               <div class="eq-band-top"><span class="eq-label" style="color:hsl(45,90%,60%)">SPEED</span><span class="eq-value" id="eq-speed-val">1.00×</span></div>
-              <div class="eq-slider-wrap"><input type="range" class="eq-slider" id="eq-speed" min="50" max="200" value="100" step="5" /></div>
-              <div class="eq-band-bot"><span>0.5×</span><span>Playback rate</span><span>2.0×</span></div>
+              <div class="eq-slider-wrap"><input type="range" class="eq-slider" id="eq-speed" min="25" max="400" value="100" step="5" /></div>
+              <div class="eq-band-bot"><span>0.25×</span><span>Playback rate</span><span>4.0×</span></div>
             </div>
             <!-- Fade In -->
             <div class="eq-band">
@@ -314,8 +343,28 @@
               <div class="eq-band-bot"><span>Fast</span><span>Analyser Smoothing</span><span>Slow</span></div>
             </div>
           </div>
+          <!-- EQ Viz + Voice Compressor Row -->
           <div class="eq-viz-row">
             <canvas id="eq-canvas" aria-label="EQ curve"></canvas>
+          </div>
+          <!-- Voice Compressor toggle -->
+          <div class="compressor-row">
+            <div class="comp-left">
+              <label class="toggle-switch" style="margin-right:8px">
+                <input type="checkbox" id="toggle-compressor" />
+                <span class="toggle-track"></span>
+              </label>
+              <span class="eq-label" style="color:hsl(45,90%,65%)">COMPRESSOR</span>
+              <span class="eq-value" style="color:var(--text-3);font-size:.7rem;margin-left:6px">Dynamic range control</span>
+            </div>
+            <div class="comp-right">
+              <span class="eq-label" style="font-size:.7rem;color:var(--text-4)">Threshold</span>
+              <input type="range" class="eq-slider" id="comp-threshold" min="-60" max="0" value="-24" step="1" style="width:90px" />
+              <span class="eq-value" id="comp-threshold-val">-24 dB</span>
+              <span class="eq-label" style="font-size:.7rem;color:var(--text-4);margin-left:8px">Ratio</span>
+              <input type="range" class="eq-slider" id="comp-ratio" min="1" max="20" value="4" step="0.5" style="width:70px" />
+              <span class="eq-value" id="comp-ratio-val">4:1</span>
+            </div>
           </div>
         </div>
 
@@ -735,6 +784,28 @@
           </div>
         </div>
 
+        <!-- ══════════ TRANSCRIBE TRACK ══════════ -->
+        <div class="tts-section" style="border-top:1px solid var(--border);margin-top:16px;padding-top:16px">
+          <div class="tts-header">
+            <div class="card-title" style="font-size:.85rem">🤖 AI Transcription — Whisper</div>
+            <div class="card-sub" style="margin-top:2px">Transcribe uploaded audio files using OpenAI Whisper</div>
+          </div>
+          <div class="transcribe-file-row" id="transcribe-file-row">
+            <div class="transcribe-track-info" id="transcribe-track-info">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:18px;height:18px;color:var(--purple)"><path d="M9 19V6l12-3v13" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6" cy="19" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+              <span id="transcribe-track-name">No track loaded — go to Library and load a track first</span>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button class="chip-btn active-chip" id="btn-transcribe-track">🤖 Transcribe Current Track</button>
+              <span id="transcribe-status" style="font-size:.72rem;color:var(--text-3)"></span>
+            </div>
+          </div>
+          <div id="transcribe-progress" style="display:none">
+            <div class="transcribe-spinner"></div>
+            <span style="font-size:.8rem;color:var(--text-3)">Transcribing with Whisper AI…</span>
+          </div>
+        </div>
+
         <!-- ══════════════ PLAYLIST / LIBRARY ══════════════ -->
         <div class="kanban-section" id="panel-library">
           <div class="kanban-header">
@@ -862,7 +933,7 @@
         <!-- Volume in bar -->
         <div class="bar-vol">
           <svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px;color:var(--text-3)"><path fill-rule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414zm-2.829 2.828a1 1 0 011.415 0A5.983 5.983 0 0115 10a5.984 5.984 0 01-1.757 4.243 1 1 0 01-1.415-1.415A3.984 3.984 0 0013 10a3.983 3.983 0 00-1.172-2.828 1 1 0 010-1.415z" clip-rule="evenodd"/></svg>
-          <input type="range" id="volume-slider" class="bar-vol-slider" min="0" max="100" value="85" aria-label="Volume" />
+          <input type="range" id="volume-slider" class="bar-vol-slider" min="0" max="200" value="85" aria-label="Volume" />
         </div>
       </div>
 
